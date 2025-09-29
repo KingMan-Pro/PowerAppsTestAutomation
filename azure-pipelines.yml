@@ -1,78 +1,59 @@
-# File: azure-pipelines.yml
-# Build Name / Format
-name: PowerAppsTestAutomation-$(date:yyyyMMdd)$(rev:.r)
+name: iLabel-CI-CD-$(date:yyyyMMdd)$(rev:.r)
 
-resources:
-  repositories:
-    - repository: PowerAppsTestAutomation
-      type: github
-      # GitHub Repo(e.g. <FORK>/PowerAppsTestAutomation)
-      # Recommended to Fork or Duplicate if custom auth flows are required
-      name: KingMan-Pro/PowerAppsTestAutomation
-      ref: master
-      # Name of the GitHub OAuth ADO Service Connection
-      endpoint: 'github.com_KingMan-Pro'
+trigger:
+  branches:
+    include:
+      - master   # master 병합 시 Stage 서버 배포
 
-parameters:
- - name: image
-   displayName: Pool Image
-   type: string
-   # See https://github.com/MicrosoftDocs/azure-devops-docs/blob/master/docs/pipelines/agents/hosted.md#use-a-microsoft-hosted-agent for more pool types
-   default: windows-latest
-   values:
-   - windows-latest
-   - vs2017-win2016
-   - windows-2019
- - name: BrowserType
-   displayName: Browser Type
-   type: string
-   default: All
-   values:
-   - Chrome
-   - Firefox
-   - All
- - name: LoginMethod
-   displayName: Login Type # See: https://docs.microsoft.com/en-us/office365/servicedescriptions/office-365-platform-service-description/user-account-management
-   type: string
-   default: CloudIdentity
-   values:
-   - CloudIdentity # Uses the default Office 365 Sign-In Service for authentication
-   - FederatedIdentity # Uses a Custom Login Action method using AD FS 2.0 or other Security Token Services for authentication. Custom code is required.
-   - PassThrough # Federated login scenario where the provided user credential is automatically logged in, requires special agent configurations
+variables:
+  buildConfiguration: 'Release'
 
-jobs:
-- job: "PowerAppsTestFrameworkAutomation"
-  pool:
-    vmImage: ${{ parameters.image }}
-    demands:
-    - msbuild
-    - visualstudio
-    - vstest
-  variables:
-  - name: PortalUrl
-    value: https://make.powerapps.com
-    # Browser PrivateMode usage (true/false)
-  - name: PrivateMode
-    value: true
-    # FileName where TestAutomationURLs are stored in JSON format
-  - name: TestUrlFileName 
-    value: TestURLs.json
-    # Project name of repo containing TestAutomationURLs (spaces should be encoded as %20)
-    # Example: Contoso Test Framework --> Contoso%20Test%20Framework
-  - name: LocalProjectName
-    value: PowerAppsTestAutomation
+stages:
+# 1. 빌드 단계
+- stage: Build
+  displayName: "Build iLabel"
+  jobs:
+  - job: BuildJob
+    pool:
+      vmImage: 'windows-latest'
+    steps:
+    - task: DotNetCoreCLI@2
+      displayName: "NuGet Restore"
+      inputs:
+        command: 'restore'
+        projects: 'iLabel/TotalLabel.sln'   # 솔루션 기준 복원
 
-  steps:
-  - checkout: self
-  - checkout: PowerAppsTestAutomation
-  #- template: localsteps.yml # Provide optional local YAML template here
-  - template: frameworksteps.yml@PowerAppsTestAutomation
-    parameters:
-      OnlineUsername: $(OnlineUsername)
-      OnlinePassword: $(OnlinePassword)
-      OnlineUrl: $(PortalUrl)
-      BrowserType: ${{ parameters.BrowserType }}
-      # File location format is /s/TeamProjectName/FilePathToTestAutomationURLs.json
-      TestAutomationURLFilePath: $(Build.SourcesDirectory)\$(LocalProjectName)\Samples\$(TestUrlFileName)
-      UsePrivateMode: $(PrivateMode)
-      LoginMethod: ${{ parameters.LoginMethod }}
+    - task: DotNetCoreCLI@2
+      displayName: "Build Solution"
+      inputs:
+        command: 'build'
+        projects: 'iLabel/TotalLabel.sln'
+        arguments: '--configuration $(buildConfiguration)'
+
+    - task: DotNetCoreCLI@2
+      displayName: "Publish Project"
+      inputs:
+        command: 'publish'
+        projects: 'iLabel/TotalLabel/TotalLabel.csproj'
+        arguments: '--configuration $(buildConfiguration) --output $(Build.ArtifactStagingDirectory)'
+        zipAfterPublish: true
+
+    - publish: $(Build.ArtifactStagingDirectory)
+      artifact: drop
+
+# 2. 배포 단계 (Stage)
+- stage: DeployStage
+  displayName: "Deploy iLabel to Stage"
+  dependsOn: Build
+  condition: succeeded()
+  jobs:
+  - job: DeployJob
+    pool:
+      vmImage: 'windows-latest'
+    steps:
+    - task: AzureWebApp@1
+      displayName: "Deploy to Azure Web App (Stage)"
+      inputs:
+        azureSubscription: 'MyServiceConnection'   # Service Connection 이름 교체
+        appName: 'ilabelweb-stage'                 # Stage 슬롯 이름
+        package: '$(Pipeline.Workspace)/drop/**/*.zip'
