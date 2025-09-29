@@ -3,7 +3,7 @@ name: iLabel-CI-CD-$(date:yyyyMMdd)$(rev:.r)
 trigger:
   branches:
     include:
-      - master   # master 병합 시 Stage 서버 배포
+      - master   # master 브랜치 병합 시 Stage 서버 자동 배포
 
 variables:
   buildConfiguration: 'Release'
@@ -17,12 +17,14 @@ stages:
     pool:
       vmImage: 'windows-latest'
     steps:
+    # NuGet 패키지 복원
     - task: DotNetCoreCLI@2
       displayName: "NuGet Restore"
       inputs:
         command: 'restore'
-        projects: 'iLabel/TotalLabel.sln'   # 솔루션 기준 복원
+        projects: 'iLabel/TotalLabel.sln'
 
+    # 솔루션 빌드
     - task: DotNetCoreCLI@2
       displayName: "Build Solution"
       inputs:
@@ -30,6 +32,7 @@ stages:
         projects: 'iLabel/TotalLabel.sln'
         arguments: '--configuration $(buildConfiguration)'
 
+    # 프로젝트 Publish (실행 프로젝트)
     - task: DotNetCoreCLI@2
       displayName: "Publish Project"
       inputs:
@@ -38,10 +41,11 @@ stages:
         arguments: '--configuration $(buildConfiguration) --output $(Build.ArtifactStagingDirectory)'
         zipAfterPublish: true
 
+    # 빌드 결과물 저장 (Artifact)
     - publish: $(Build.ArtifactStagingDirectory)
       artifact: drop
 
-# 2. 배포 단계 (Stage)
+# 2. 배포 단계 (Stage 서버)
 - stage: DeployStage
   displayName: "Deploy iLabel to Stage"
   dependsOn: Build
@@ -54,6 +58,6 @@ stages:
     - task: AzureWebApp@1
       displayName: "Deploy to Azure Web App (Stage)"
       inputs:
-        azureSubscription: 'MyServiceConnection'   # Service Connection 이름 교체
-        appName: 'ilabelweb-stage'                 # Stage 슬롯 이름
+        azureSubscription: 'Pipeline-iLabelweb'   # 👈 Service Connection 이름
+        appName: 'ilabelweb-stage'                # 👈 Stage 슬롯 이름
         package: '$(Pipeline.Workspace)/drop/**/*.zip'
